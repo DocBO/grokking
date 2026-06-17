@@ -30,10 +30,34 @@ The project uses [Weights & Biases](https://wandb.ai/site) to keep track of expe
     uv run python grokking/cli.py --optimizer ensemble --ensemble_size 4
     ```
     This keeps several nearby Transformer trajectories, applies a
-    temperature-scaled random parameter force after each AdamW step, heats the
-    ensemble when the selected score stalls, cools it when the best trajectory
-    improves, and periodically resamples weaker trajectories around the current
-    best one.
+    loss-scaled random parameter force after each AdamW step, probes the
+    ensemble every `--probe_interval` steps, and collapses all trajectories
+    around the least-free-energy state every `--collapse_probes` probes.
+
+* To run the earlier adaptive resampling ensemble:
+    ```bash
+    uv run python grokking/cli.py --optimizer ensemble-simple --ensemble_size 4
+    ```
+    `ensemble-simple` keeps the intermediate method available for comparison:
+    it heats after stalled free-energy progress, cools after improvement, and
+    resamples weak trajectories around the current best trajectory.
+
+* To collect time-to-95% validation statistics:
+    ```bash
+    uv run python grokking/stats.py
+    ```
+    By default this runs 20 seeds, 3 repeats, and all optimizers
+    (`adamw`, `ensemble-simple`, `ensemble`). It writes
+    `stats_runs/time_step_trace.csv` and
+    `stats_runs/time_to_threshold_summary.csv`.
+
+* To run a harder generalization task:
+    ```bash
+    uv run python grokking/cli.py --operation permuted_quadratic --training_fraction 0.3
+    ```
+    `permuted_quadratic` maps a quadratic expression through a primitive-root
+    permutation, so the underlying rule is compact but nearby labels look much
+    less smooth than in the default modular division task.
 
 * To run a grid search using W&B Sweeps:
     ```bash

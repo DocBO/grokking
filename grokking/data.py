@@ -90,7 +90,11 @@ def operation_mod_p_data(
 
 
 def get_data_loaders(
-    operation: str, prime: int, training_fraction: float, batch_size: int
+    operation: str,
+    prime: int,
+    training_fraction: float,
+    batch_size: int,
+    seed: int | None = None,
 ) -> tuple[DataLoader[tuple[Tensor, Tensor]], DataLoader[tuple[Tensor, Tensor]]]:
     inputs, labels = operation_mod_p_data(operation, prime, prime, prime + 1)
     dataset = torch.utils.data.TensorDataset(inputs, labels)
@@ -98,8 +102,12 @@ def get_data_loaders(
     train_size = int(training_fraction * len(dataset))
     val_size = len(dataset) - train_size
 
+    generator = None
+    if seed is not None:
+        generator = torch.Generator().manual_seed(seed)
+
     train_dataset, val_dataset = torch.utils.data.random_split(
-        dataset, [train_size, val_size]
+        dataset, [train_size, val_size], generator=generator
     )
 
     batch_size = min(batch_size, ceil(len(dataset) / 2))
