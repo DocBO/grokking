@@ -401,7 +401,7 @@ Default benchmark design:
    - `ensemble-simple`
    - `ensemble`
 4. Validation target:
-   - `95%` validation accuracy.
+   - `90%` validation accuracy.
 
 The script writes two CSV files:
 
@@ -432,7 +432,7 @@ best_index
 reached_threshold
 ```
 
-`time_to_threshold_summary.csv` stores the first observed time to 95%
+`time_to_threshold_summary.csv` stores the first observed time to 90%
 validation accuracy:
 
 ```text

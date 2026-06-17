@@ -157,7 +157,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--seed_offset", type=int, default=0)
     parser.add_argument("--seed_stride", type=int, default=100_000)
-    parser.add_argument("--threshold", type=float, default=0.95)
+    parser.add_argument("--threshold", type=float, default=0.90)
     parser.add_argument("--eval_interval", type=int, default=10)
     parser.add_argument("--output_dir", type=Path, default=Path("stats_runs"))
     parser.add_argument(

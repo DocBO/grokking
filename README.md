@@ -42,7 +42,7 @@ The project uses [Weights & Biases](https://wandb.ai/site) to keep track of expe
     it heats after stalled free-energy progress, cools after improvement, and
     resamples weak trajectories around the current best trajectory.
 
-* To collect time-to-95% validation statistics:
+* To collect time-to-90% validation statistics:
     ```bash
     uv run python grokking/stats.py
     ```
