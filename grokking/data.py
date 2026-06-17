@@ -7,6 +7,51 @@ from torch.utils.data import DataLoader
 
 Op = Callable[[Tensor, Tensor, int], tuple[Tensor, Tensor, Tensor]]
 
+
+def prime_factors(n: int) -> list[int]:
+    factors = []
+    divisor = 2
+    while divisor * divisor <= n:
+        if n % divisor == 0:
+            factors.append(divisor)
+            while n % divisor == 0:
+                n //= divisor
+        divisor += 1
+    if n > 1:
+        factors.append(n)
+    return factors
+
+
+def primitive_root(prime: int) -> int:
+    if prime < 3:
+        raise ValueError("permuted_quadratic requires an odd prime")
+
+    phi = prime - 1
+    factors = prime_factors(phi)
+    for candidate in range(2, prime):
+        if all(pow(candidate, phi // factor, prime) != 1 for factor in factors):
+            return candidate
+
+    raise ValueError(f"could not find a primitive root modulo {prime}")
+
+
+def permuted_quadratic_task(x: Tensor, y: Tensor, p: int) -> tuple[Tensor, Tensor, Tensor]:
+    """
+    g^q mod p, where g is a primitive root and q is quadratic in x and y.
+
+    The rule is compact in exponent space, but the primitive-root permutation
+    makes adjacent labels look irregular, which makes validation generalization
+    harder than the smooth arithmetic tasks.
+    """
+    root = primitive_root(p)
+    exponent = (x * x + x * y + 3 * y * y + 5 * x + 7 * y) % (p - 1)
+    labels = torch.tensor(
+        [pow(root, int(value), p) for value in exponent.tolist()],
+        dtype=x.dtype,
+    )
+    return x, y, labels
+
+
 DIVISION_MODULO_OPERATIONS: dict[str, Op] = {
     "x/y": lambda x, y, p: (x * y % p, y, x),
 }
@@ -14,6 +59,7 @@ DIVISION_MODULO_OPERATIONS: dict[str, Op] = {
 ALL_MODULO_OPERATIONS: dict[str, Op] = {
     "x+y": lambda x, y, p: (x, y, (x + y) % p),
     "x-y": lambda x, y, p: (x, y, (x - y) % p),
+    "permuted_quadratic": permuted_quadratic_task,
     **DIVISION_MODULO_OPERATIONS,
 }
 
