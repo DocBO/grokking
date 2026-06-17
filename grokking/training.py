@@ -1,6 +1,6 @@
 from argparse import Namespace
 from dataclasses import dataclass
-from typing import Any, Literal, Sized
+from typing import Any, Sized
 import torch
 from torch import Tensor
 from torch.optim import Optimizer
@@ -75,17 +75,14 @@ def main(args: Namespace) -> None:
 @dataclass
 class EnsembleConfig:
     n_trajectories: int
-    init_temperature: float
+    temperature_scale: float
     min_temperature: float
     max_temperature: float
-    heating: float
-    cooling: float
-    stall_window: int
-    resample_fraction: float
+    probe_interval: int
+    collapse_probes: int
     init_perturb_scale: float
-    resample_perturb_scale: float
+    collapse_perturb_scale: float
     force_scale: float
-    selection_metric: Literal["validation_loss", "training_loss", "free_energy"]
     entropy_weight: float
 
 
@@ -96,7 +93,7 @@ class ParticleMetrics:
     val_loss: float
     val_acc: float
     spread: float
-    score: float
+    free_energy: float
 
 
 def ensemble_main(
@@ -126,9 +123,8 @@ def ensemble_main(
         for _ in range(ensemble_cfg.n_trajectories)
     ]
     batch_idxs = [0 for _ in range(ensemble_cfg.n_trajectories)]
-    temperature = ensemble_cfg.init_temperature
-    best_score = float("inf")
-    no_improve_steps = 0
+    temperature = ensemble_cfg.min_temperature
+    probes_since_collapse = 0
     best_idx = 0
 
     for step in tqdm(range(config.num_steps)):
@@ -157,7 +153,7 @@ def ensemble_main(
                 force_scale=ensemble_cfg.force_scale,
             )
 
-        if step in (1, 10) or step % 100 == 0:
+        if should_probe_ensemble(step, ensemble_cfg.probe_interval):
             particle_metrics = evaluate_ensemble(
                 models,
                 train_inputs,
@@ -168,63 +164,66 @@ def ensemble_main(
                 ensemble_cfg,
                 temperature,
             )
-            scores = torch.tensor(
-                [metrics.score for metrics in particle_metrics],
+            free_energies = torch.tensor(
+                [metrics.free_energy for metrics in particle_metrics],
                 device=device,
             )
-            best_idx = int(torch.argmin(scores).item())
-            current_score = particle_metrics[best_idx].score
+            best_idx = int(torch.argmin(free_energies).item())
+            best_loss = particle_metrics[best_idx].val_loss
+            temperature = loss_scaled_temperature(best_loss, ensemble_cfg)
+            probes_since_collapse += 1
 
-            if current_score < best_score:
-                best_score = current_score
-                no_improve_steps = 0
-                temperature = max(
-                    ensemble_cfg.min_temperature,
-                    temperature * ensemble_cfg.cooling,
+            collapsed = 0
+            if probes_since_collapse >= ensemble_cfg.collapse_probes:
+                collapsed = collapse_ensemble(
+                    models,
+                    optimizers,
+                    best_idx,
+                    temperature,
+                    ensemble_cfg,
                 )
-            else:
-                no_improve_steps += 1
+                probes_since_collapse = 0
 
-            if no_improve_steps >= ensemble_cfg.stall_window:
-                temperature = min(
-                    ensemble_cfg.max_temperature,
-                    temperature * ensemble_cfg.heating,
-                )
-                no_improve_steps = 0
-
-            resampled = resample_weak_trajectories(
-                models,
-                optimizers,
-                scores,
-                best_idx,
-                temperature,
-                ensemble_cfg,
-            )
             log_ensemble_metrics(
                 particle_metrics,
                 best_idx,
                 temperature,
-                resampled,
+                collapsed,
+                probes_since_collapse,
                 step,
             )
 
 
 def get_ensemble_config(config: Any) -> EnsembleConfig:
-    return EnsembleConfig(
+    ensemble_cfg = EnsembleConfig(
         n_trajectories=getattr(config, "ensemble_size", 4),
-        init_temperature=getattr(config, "temperature", 1e-5),
+        temperature_scale=getattr(config, "temperature", 1e-5),
         min_temperature=getattr(config, "min_temperature", 1e-7),
         max_temperature=getattr(config, "max_temperature", 1e-2),
-        heating=getattr(config, "temperature_heating", 2.0),
-        cooling=getattr(config, "temperature_cooling", 0.5),
-        stall_window=getattr(config, "stall_window", 5),
-        resample_fraction=getattr(config, "resample_fraction", 0.5),
+        probe_interval=getattr(config, "probe_interval", 10),
+        collapse_probes=getattr(config, "collapse_probes", 10),
         init_perturb_scale=getattr(config, "init_perturb_scale", 1e-3),
-        resample_perturb_scale=getattr(config, "resample_perturb_scale", 1e-3),
+        collapse_perturb_scale=getattr(config, "collapse_perturb_scale", 1e-3),
         force_scale=getattr(config, "force_scale", 1.0),
-        selection_metric=getattr(config, "selection_metric", "validation_loss"),
         entropy_weight=getattr(config, "entropy_weight", 0.01),
     )
+    validate_ensemble_config(ensemble_cfg)
+    return ensemble_cfg
+
+
+def validate_ensemble_config(ensemble_cfg: EnsembleConfig) -> None:
+    if ensemble_cfg.n_trajectories < 1:
+        raise ValueError("ensemble_size must be at least 1")
+    if ensemble_cfg.temperature_scale < 0:
+        raise ValueError("temperature must be non-negative")
+    if ensemble_cfg.min_temperature <= 0:
+        raise ValueError("min_temperature must be positive")
+    if ensemble_cfg.max_temperature < ensemble_cfg.min_temperature:
+        raise ValueError("max_temperature must be at least min_temperature")
+    if ensemble_cfg.probe_interval <= 0:
+        raise ValueError("probe_interval must be positive")
+    if ensemble_cfg.collapse_probes <= 0:
+        raise ValueError("collapse_probes must be positive")
 
 
 def setup_ensemble(
@@ -358,6 +357,20 @@ def current_learning_rate(optimizer: Optimizer) -> float:
     return float(optimizer.param_groups[0]["lr"])
 
 
+def should_probe_ensemble(step: int, probe_interval: int) -> bool:
+    if probe_interval <= 0:
+        raise ValueError("probe_interval must be positive")
+    return step == 1 or step % probe_interval == 0
+
+
+def loss_scaled_temperature(loss: float, ensemble_cfg: EnsembleConfig) -> float:
+    temperature = ensemble_cfg.temperature_scale * max(loss, 0.0)
+    return min(
+        ensemble_cfg.max_temperature,
+        max(ensemble_cfg.min_temperature, temperature),
+    )
+
+
 def add_random_force(
     model: Transformer,
     learning_rate: float,
@@ -416,18 +429,11 @@ def evaluate_ensemble(
     for model, spread in zip(models, spreads):
         train_loss, train_acc = evaluate(model, train_inputs, train_labels, criterion)
         val_loss, val_acc = evaluate(model, val_inputs, val_labels, criterion)
-
-        if ensemble_cfg.selection_metric == "training_loss":
-            base_score = train_loss
-        else:
-            base_score = val_loss
-
-        if ensemble_cfg.selection_metric == "free_energy":
-            base_score -= (
-                ensemble_cfg.entropy_weight
-                * temperature
-                * torch.log(torch.tensor(spread + 1e-12)).item()
-            )
+        free_energy = val_loss - (
+            ensemble_cfg.entropy_weight
+            * temperature
+            * torch.log(torch.tensor(spread + 1e-12)).item()
+        )
 
         metrics.append(
             ParticleMetrics(
@@ -436,7 +442,7 @@ def evaluate_ensemble(
                 val_loss=val_loss,
                 val_acc=val_acc,
                 spread=spread,
-                score=base_score,
+                free_energy=free_energy,
             )
         )
 
@@ -456,43 +462,38 @@ def copy_trajectory(
     perturb_parameters(target, perturb_scale)
 
 
-def resample_weak_trajectories(
+def collapse_ensemble(
     models: list[Transformer],
     optimizers: list[Optimizer],
-    scores: Tensor,
-    best_idx: int,
+    center_idx: int,
     temperature: float,
     ensemble_cfg: EnsembleConfig,
 ) -> int:
-    if len(models) <= 1 or ensemble_cfg.resample_fraction <= 0:
+    if len(models) <= 1:
         return 0
 
-    n_resample = min(
-        len(models) - 1,
-        max(1, int(len(models) * ensemble_cfg.resample_fraction)),
-    )
-    worst = torch.argsort(scores, descending=True)[:n_resample].tolist()
     perturb_scale = (
-        ensemble_cfg.resample_perturb_scale
+        ensemble_cfg.collapse_perturb_scale
         * max(temperature, ensemble_cfg.min_temperature) ** 0.5
     )
-    resampled = 0
+    collapsed = 0
 
-    for idx in worst:
-        if idx == best_idx:
+    for idx in range(len(models)):
+        if idx == center_idx:
             continue
-        copy_trajectory(models[best_idx], models[idx], perturb_scale)
+        copy_trajectory(models[center_idx], models[idx], perturb_scale)
         reset_optimizer_state(optimizers[idx])
-        resampled += 1
+        collapsed += 1
 
-    return resampled
+    return collapsed
 
 
 def log_ensemble_metrics(
     particle_metrics: list[ParticleMetrics],
     best_idx: int,
     temperature: float,
-    resampled: int,
+    collapsed: int,
+    probes_since_collapse: int,
     step: int,
 ) -> None:
     best = particle_metrics[best_idx]
@@ -502,9 +503,10 @@ def log_ensemble_metrics(
         "validation/loss": best.val_loss,
         "validation/accuracy": best.val_acc,
         "ensemble/best_index": best_idx,
-        "ensemble/best_score": best.score,
+        "ensemble/best_free_energy": best.free_energy,
         "ensemble/temperature": temperature,
-        "ensemble/resampled": resampled,
+        "ensemble/collapsed": collapsed,
+        "ensemble/probes_since_collapse": probes_since_collapse,
     }
 
     for idx, metrics in enumerate(particle_metrics):
@@ -513,7 +515,7 @@ def log_ensemble_metrics(
         payload[f"ensemble/particle_{idx}/validation_loss"] = metrics.val_loss
         payload[f"ensemble/particle_{idx}/validation_accuracy"] = metrics.val_acc
         payload[f"ensemble/particle_{idx}/spread"] = metrics.spread
-        payload[f"ensemble/particle_{idx}/score"] = metrics.score
+        payload[f"ensemble/particle_{idx}/free_energy"] = metrics.free_energy
 
     wandb.log(payload, step=step)
 

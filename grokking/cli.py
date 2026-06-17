@@ -28,19 +28,11 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=1e-5)
     parser.add_argument("--min_temperature", type=float, default=1e-7)
     parser.add_argument("--max_temperature", type=float, default=1e-2)
-    parser.add_argument("--temperature_heating", type=float, default=2.0)
-    parser.add_argument("--temperature_cooling", type=float, default=0.5)
-    parser.add_argument("--stall_window", type=int, default=5)
-    parser.add_argument("--resample_fraction", type=float, default=0.5)
+    parser.add_argument("--probe_interval", type=int, default=10)
+    parser.add_argument("--collapse_probes", type=int, default=10)
     parser.add_argument("--init_perturb_scale", type=float, default=1e-3)
-    parser.add_argument("--resample_perturb_scale", type=float, default=1e-3)
+    parser.add_argument("--collapse_perturb_scale", type=float, default=1e-3)
     parser.add_argument("--force_scale", type=float, default=1.0)
-    parser.add_argument(
-        "--selection_metric",
-        type=str,
-        choices=["validation_loss", "training_loss", "free_energy"],
-        default="validation_loss",
-    )
     parser.add_argument("--entropy_weight", type=float, default=0.01)
     args: Namespace = parser.parse_args()
 
