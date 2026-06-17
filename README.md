@@ -25,6 +25,16 @@ The project uses [Weights & Biases](https://wandb.ai/site) to keep track of expe
     uv run python grokking/cli.py
     ```
 
+* To run the ensemble temperature loop:
+    ```bash
+    uv run python grokking/cli.py --optimizer ensemble --ensemble_size 4
+    ```
+    This keeps several nearby Transformer trajectories, applies a
+    temperature-scaled random parameter force after each AdamW step, heats the
+    ensemble when the selected score stalls, cools it when the best trajectory
+    improves, and periodically resamples weaker trajectories around the current
+    best one.
+
 * To run a grid search using W&B Sweeps:
     ```bash
     uv run wandb sweep sweep.yaml
