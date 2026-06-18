@@ -27,7 +27,7 @@ from training import (
     setup_ensemble_simple,
     setup_model,
     should_probe_ensemble,
-    time_cool_temperature,
+    time_cool_max_temperature,
     train_step,
 )
 
@@ -362,6 +362,7 @@ def run_ensemble_simple(
     ]
     batch_idxs = [0 for _ in range(simple_cfg.n_trajectories)]
     temperature = simple_cfg.init_temperature
+    time_temperature_ceiling = simple_cfg.max_temperature
     best_free_energy = float("inf")
     no_improve_steps = 0
     probe_count = 0
@@ -396,11 +397,12 @@ def run_ensemble_simple(
                 simple_cfg.force_scale,
             )
 
-        temperature = time_cool_temperature(
-            temperature,
+        time_temperature_ceiling = time_cool_max_temperature(
+            time_temperature_ceiling,
             simple_cfg.time_cooling_rate,
             simple_cfg.min_temperature,
         )
+        temperature = min(temperature, time_temperature_ceiling)
         completed_steps = step + 1
         if should_eval(completed_steps, args.eval_interval):
             probe_count += 1
@@ -421,7 +423,10 @@ def run_ensemble_simple(
             best = metrics[best_idx]
             final_val_loss = best.val_loss
             final_val_acc = best.val_acc
-            temperature_ceiling = loss_scaled_max_temperature(best.val_loss, simple_cfg)
+            temperature_ceiling = min(
+                time_temperature_ceiling,
+                loss_scaled_max_temperature(best.val_loss, simple_cfg),
+            )
 
             if best.free_energy < best_free_energy:
                 best_free_energy = best.free_energy

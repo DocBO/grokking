@@ -166,6 +166,7 @@ def ensemble_simple_main(
     ]
     batch_idxs = [0 for _ in range(simple_cfg.n_trajectories)]
     temperature = simple_cfg.init_temperature
+    time_temperature_ceiling = simple_cfg.max_temperature
     best_free_energy = float("inf")
     no_improve_steps = 0
     best_idx = 0
@@ -196,11 +197,12 @@ def ensemble_simple_main(
                 force_scale=simple_cfg.force_scale,
             )
 
-        temperature = time_cool_temperature(
-            temperature,
+        time_temperature_ceiling = time_cool_max_temperature(
+            time_temperature_ceiling,
             simple_cfg.time_cooling_rate,
             simple_cfg.min_temperature,
         )
+        temperature = min(temperature, time_temperature_ceiling)
         if step in (1, 10) or step % 100 == 0:
             particle_metrics = evaluate_ensemble_simple(
                 models,
@@ -218,8 +220,11 @@ def ensemble_simple_main(
             )
             best_idx = int(torch.argmin(free_energies).item())
             current_free_energy = particle_metrics[best_idx].free_energy
-            temperature_ceiling = loss_scaled_max_temperature(
-                particle_metrics[best_idx].val_loss, simple_cfg
+            temperature_ceiling = min(
+                time_temperature_ceiling,
+                loss_scaled_max_temperature(
+                    particle_metrics[best_idx].val_loss, simple_cfg
+                ),
             )
 
             if current_free_energy < best_free_energy:
@@ -643,10 +648,10 @@ def loss_scaled_max_temperature(loss: float, simple_cfg: EnsembleSimpleConfig) -
     )
 
 
-def time_cool_temperature(
-    temperature: float, cooling_rate: float, min_temperature: float
+def time_cool_max_temperature(
+    max_temperature: float, cooling_rate: float, min_temperature: float
 ) -> float:
-    return max(min_temperature, temperature * exp(-cooling_rate))
+    return max(min_temperature, max_temperature * exp(-cooling_rate))
 
 
 def add_random_force(
