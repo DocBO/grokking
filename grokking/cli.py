@@ -40,6 +40,7 @@ if __name__ == "__main__":
     parser.add_argument("--collapse_probes", type=int, default=10)
     parser.add_argument("--temperature_heating", type=float, default=2.0)
     parser.add_argument("--temperature_cooling", type=float, default=0.5)
+    parser.add_argument("--time_cooling_rate", type=float, default=1e-4)
     parser.add_argument("--stall_window", type=int, default=5)
     parser.add_argument("--resample_fraction", type=float, default=0.5)
     parser.add_argument("--init_perturb_scale", type=float, default=1e-3)

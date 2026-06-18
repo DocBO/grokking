@@ -27,6 +27,7 @@ from training import (
     setup_ensemble_simple,
     setup_model,
     should_probe_ensemble,
+    time_cool_temperature,
     train_step,
 )
 
@@ -179,6 +180,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--collapse_probes", type=int, default=10)
     parser.add_argument("--temperature_heating", type=float, default=2.0)
     parser.add_argument("--temperature_cooling", type=float, default=0.5)
+    parser.add_argument("--time_cooling_rate", type=float, default=1e-4)
     parser.add_argument("--stall_window", type=int, default=5)
     parser.add_argument("--resample_fraction", type=float, default=0.5)
     parser.add_argument("--init_perturb_scale", type=float, default=1e-3)
@@ -394,6 +396,11 @@ def run_ensemble_simple(
                 simple_cfg.force_scale,
             )
 
+        temperature = time_cool_temperature(
+            temperature,
+            simple_cfg.time_cooling_rate,
+            simple_cfg.min_temperature,
+        )
         completed_steps = step + 1
         if should_eval(completed_steps, args.eval_interval):
             probe_count += 1

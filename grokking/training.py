@@ -1,5 +1,6 @@
 from argparse import Namespace
 from dataclasses import dataclass
+from math import exp
 from typing import Any, Sized
 import torch
 from torch import Tensor
@@ -119,6 +120,7 @@ class EnsembleSimpleConfig:
     max_temperature: float
     heating: float
     cooling: float
+    time_cooling_rate: float
     stall_window: int
     resample_fraction: float
     init_perturb_scale: float
@@ -194,6 +196,11 @@ def ensemble_simple_main(
                 force_scale=simple_cfg.force_scale,
             )
 
+        temperature = time_cool_temperature(
+            temperature,
+            simple_cfg.time_cooling_rate,
+            simple_cfg.min_temperature,
+        )
         if step in (1, 10) or step % 100 == 0:
             particle_metrics = evaluate_ensemble_simple(
                 models,
@@ -371,6 +378,7 @@ def get_ensemble_simple_config(config: Any) -> EnsembleSimpleConfig:
         max_temperature=getattr(config, "max_temperature", 1e-2),
         heating=getattr(config, "temperature_heating", 2.0),
         cooling=getattr(config, "temperature_cooling", 0.5),
+        time_cooling_rate=getattr(config, "time_cooling_rate", 1e-4),
         stall_window=getattr(config, "stall_window", 5),
         resample_fraction=getattr(config, "resample_fraction", 0.5),
         init_perturb_scale=getattr(config, "init_perturb_scale", 1e-3),
@@ -410,6 +418,8 @@ def validate_ensemble_simple_config(simple_cfg: EnsembleSimpleConfig) -> None:
         raise ValueError("temperature_heating must be at least 1")
     if not 0 < simple_cfg.cooling <= 1:
         raise ValueError("temperature_cooling must be in (0, 1]")
+    if simple_cfg.time_cooling_rate < 0:
+        raise ValueError("time_cooling_rate must be non-negative")
     if simple_cfg.stall_window <= 0:
         raise ValueError("stall_window must be positive")
     if not 0 <= simple_cfg.resample_fraction <= 1:
@@ -631,6 +641,12 @@ def loss_scaled_max_temperature(loss: float, simple_cfg: EnsembleSimpleConfig) -
         simple_cfg.max_temperature,
         max(simple_cfg.min_temperature, simple_cfg.max_temperature * loss_factor),
     )
+
+
+def time_cool_temperature(
+    temperature: float, cooling_rate: float, min_temperature: float
+) -> float:
+    return max(min_temperature, temperature * exp(-cooling_rate))
 
 
 def add_random_force(
