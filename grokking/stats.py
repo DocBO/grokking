@@ -20,6 +20,7 @@ from training import (
     get_ensemble_config,
     get_ensemble_simple_config,
     load_data,
+    loss_scaled_max_temperature,
     loss_scaled_temperature,
     resample_weak_trajectories,
     setup_ensemble,
@@ -45,6 +46,7 @@ TRACE_FIELDS = [
     "val_loss",
     "val_acc",
     "temperature",
+    "temperature_ceiling",
     "free_energy",
     "best_index",
     "reached_threshold",
@@ -90,9 +92,10 @@ def main() -> None:
     trace_path = args.output_dir / "time_step_trace.csv"
     summary_path = args.output_dir / "time_to_threshold_summary.csv"
 
-    with trace_path.open("w", newline="") as trace_file, summary_path.open(
-        "w", newline=""
-    ) as summary_file:
+    with (
+        trace_path.open("w", newline="") as trace_file,
+        summary_path.open("w", newline="") as summary_file,
+    ):
         trace_writer = csv.DictWriter(trace_file, fieldnames=TRACE_FIELDS)
         summary_writer = csv.DictWriter(summary_file, fieldnames=SUMMARY_FIELDS)
         trace_writer.writeheader()
@@ -142,7 +145,9 @@ def main() -> None:
 
 def parse_args() -> Namespace:
     parser = ArgumentParser()
-    parser.add_argument("--operation", type=str, choices=ALL_OPERATIONS.keys(), default="x/y")
+    parser.add_argument(
+        "--operation", type=str, choices=ALL_OPERATIONS.keys(), default="x/y"
+    )
     parser.add_argument("--training_fraction", type=float, default=0.5)
     parser.add_argument("--prime", type=int, default=97)
     parser.add_argument("--num_layers", type=int, default=2)
@@ -288,7 +293,9 @@ def run_adamw(
 
         completed_steps = step + 1
         if should_eval(completed_steps, args.eval_interval):
-            train_loss, train_acc = evaluate(model, train_inputs, train_labels, criterion)
+            train_loss, train_acc = evaluate(
+                model, train_inputs, train_labels, criterion
+            )
             final_val_loss, final_val_acc = evaluate(
                 model, val_inputs, val_labels, criterion
             )
@@ -313,11 +320,14 @@ def run_adamw(
                     None,
                     None,
                     None,
+                    None,
                     args.threshold,
                 )
             )
 
-    return state.result(args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss)
+    return state.result(
+        args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss
+    )
 
 
 def run_ensemble_simple(
@@ -345,7 +355,9 @@ def run_ensemble_simple(
         device,
     )
     n_train = len(train_inputs)
-    perms = [torch.randperm(n_train, device=device) for _ in range(simple_cfg.n_trajectories)]
+    perms = [
+        torch.randperm(n_train, device=device) for _ in range(simple_cfg.n_trajectories)
+    ]
     batch_idxs = [0 for _ in range(simple_cfg.n_trajectories)]
     temperature = simple_cfg.init_temperature
     best_free_energy = float("inf")
@@ -367,7 +379,13 @@ def run_ensemble_simple(
             stop = start + batch_size
             idx = perms[particle_idx][start:stop]
             batch_idxs[particle_idx] = stop
-            train_step(model, train_inputs[idx], train_labels[idx], optimizers[particle_idx], criterion)
+            train_step(
+                model,
+                train_inputs[idx],
+                train_labels[idx],
+                optimizers[particle_idx],
+                criterion,
+            )
             schedulers[particle_idx].step()
             add_random_force(
                 model,
@@ -389,23 +407,29 @@ def run_ensemble_simple(
                 simple_cfg,
                 temperature,
             )
-            free_energies = torch.tensor([metric.free_energy for metric in metrics], device=device)
+            free_energies = torch.tensor(
+                [metric.free_energy for metric in metrics], device=device
+            )
             best_idx = int(torch.argmin(free_energies).item())
             best = metrics[best_idx]
             final_val_loss = best.val_loss
             final_val_acc = best.val_acc
+            temperature_ceiling = loss_scaled_max_temperature(best.val_loss, simple_cfg)
 
             if best.free_energy < best_free_energy:
                 best_free_energy = best.free_energy
                 no_improve_steps = 0
-                temperature = max(simple_cfg.min_temperature, temperature * simple_cfg.cooling)
+                temperature = max(
+                    simple_cfg.min_temperature, temperature * simple_cfg.cooling
+                )
             else:
                 no_improve_steps += 1
 
             if no_improve_steps >= simple_cfg.stall_window:
-                temperature = min(simple_cfg.max_temperature, temperature * simple_cfg.heating)
+                temperature = min(temperature_ceiling, temperature * simple_cfg.heating)
                 no_improve_steps = 0
 
+            temperature = min(temperature, temperature_ceiling)
             resampled = resample_weak_trajectories(
                 models, optimizers, free_energies, best_idx, temperature, simple_cfg
             )
@@ -438,13 +462,16 @@ def run_ensemble_simple(
                     best.val_loss,
                     best.val_acc,
                     temperature,
+                    temperature_ceiling,
                     best.free_energy,
                     best_idx,
                     args.threshold,
                 )
             )
 
-    return state.result(args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss)
+    return state.result(
+        args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss
+    )
 
 
 def run_ensemble(
@@ -472,7 +499,10 @@ def run_ensemble(
         device,
     )
     n_train = len(train_inputs)
-    perms = [torch.randperm(n_train, device=device) for _ in range(ensemble_cfg.n_trajectories)]
+    perms = [
+        torch.randperm(n_train, device=device)
+        for _ in range(ensemble_cfg.n_trajectories)
+    ]
     batch_idxs = [0 for _ in range(ensemble_cfg.n_trajectories)]
     temperature = ensemble_cfg.min_temperature
     probes_since_collapse = 0
@@ -493,7 +523,13 @@ def run_ensemble(
             stop = start + batch_size
             idx = perms[particle_idx][start:stop]
             batch_idxs[particle_idx] = stop
-            train_step(model, train_inputs[idx], train_labels[idx], optimizers[particle_idx], criterion)
+            train_step(
+                model,
+                train_inputs[idx],
+                train_labels[idx],
+                optimizers[particle_idx],
+                criterion,
+            )
             schedulers[particle_idx].step()
             add_random_force(
                 model,
@@ -515,7 +551,9 @@ def run_ensemble(
                 ensemble_cfg,
                 temperature,
             )
-            free_energies = torch.tensor([metric.free_energy for metric in metrics], device=device)
+            free_energies = torch.tensor(
+                [metric.free_energy for metric in metrics], device=device
+            )
             best_idx = int(torch.argmin(free_energies).item())
             best = metrics[best_idx]
             final_val_loss = best.val_loss
@@ -557,6 +595,7 @@ def run_ensemble(
                     best.val_loss,
                     best.val_acc,
                     temperature,
+                    None,
                     best.free_energy,
                     best_idx,
                     args.threshold,
@@ -564,7 +603,9 @@ def run_ensemble(
             )
             _ = collapsed
 
-    return state.result(args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss)
+    return state.result(
+        args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss
+    )
 
 
 class ThresholdState:
@@ -637,6 +678,7 @@ def trace_row(
     val_loss: float,
     val_acc: float,
     temperature: float | None,
+    temperature_ceiling: float | None,
     free_energy: float | None,
     best_idx: int | None,
     threshold: float,
@@ -656,6 +698,7 @@ def trace_row(
         "val_loss": val_loss,
         "val_acc": val_acc,
         "temperature": temperature,
+        "temperature_ceiling": temperature_ceiling,
         "free_energy": free_energy,
         "best_index": best_idx,
         "reached_threshold": val_acc >= threshold,

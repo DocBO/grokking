@@ -57,8 +57,13 @@ def main(args: Namespace) -> None:
         return
 
     model, optimizer, scheduler, criterion = setup_model(
-        config.num_layers, config.dim_model, config.num_heads, config.prime,
-        config.learning_rate, config.weight_decay, device,
+        config.num_layers,
+        config.dim_model,
+        config.num_heads,
+        config.prime,
+        config.learning_rate,
+        config.weight_decay,
+        device,
     )
 
     n_train = len(train_inputs)
@@ -77,7 +82,9 @@ def main(args: Namespace) -> None:
         scheduler.step()
 
         if step in (1, 10) or step % 100 == 0:
-            train_loss, train_acc = evaluate(model, train_inputs, train_labels, criterion)
+            train_loss, train_acc = evaluate(
+                model, train_inputs, train_labels, criterion
+            )
             val_loss, val_acc = evaluate(model, val_inputs, val_labels, criterion)
             wandb.log(
                 {
@@ -153,8 +160,7 @@ def ensemble_simple_main(
 
     n_train = len(train_inputs)
     perms = [
-        torch.randperm(n_train, device=device)
-        for _ in range(simple_cfg.n_trajectories)
+        torch.randperm(n_train, device=device) for _ in range(simple_cfg.n_trajectories)
     ]
     batch_idxs = [0 for _ in range(simple_cfg.n_trajectories)]
     temperature = simple_cfg.init_temperature
@@ -205,18 +211,24 @@ def ensemble_simple_main(
             )
             best_idx = int(torch.argmin(free_energies).item())
             current_free_energy = particle_metrics[best_idx].free_energy
+            temperature_ceiling = loss_scaled_max_temperature(
+                particle_metrics[best_idx].val_loss, simple_cfg
+            )
 
             if current_free_energy < best_free_energy:
                 best_free_energy = current_free_energy
                 no_improve_steps = 0
-                temperature = max(simple_cfg.min_temperature, temperature * simple_cfg.cooling)
+                temperature = max(
+                    simple_cfg.min_temperature, temperature * simple_cfg.cooling
+                )
             else:
                 no_improve_steps += 1
 
             if no_improve_steps >= simple_cfg.stall_window:
-                temperature = min(simple_cfg.max_temperature, temperature * simple_cfg.heating)
+                temperature = min(temperature_ceiling, temperature * simple_cfg.heating)
                 no_improve_steps = 0
 
+            temperature = min(temperature, temperature_ceiling)
             resampled = resample_weak_trajectories(
                 models,
                 optimizers,
@@ -229,6 +241,7 @@ def ensemble_simple_main(
                 particle_metrics,
                 best_idx,
                 temperature,
+                temperature_ceiling,
                 resampled,
                 step,
             )
@@ -432,8 +445,7 @@ def setup_ensemble(
         device,
     )
     base_state = {
-        key: value.detach().clone()
-        for key, value in base_model.state_dict().items()
+        key: value.detach().clone() for key, value in base_model.state_dict().items()
     }
 
     for _ in range(ensemble_cfg.n_trajectories):
@@ -484,8 +496,7 @@ def setup_ensemble_simple(
         device,
     )
     base_state = {
-        key: value.detach().clone()
-        for key, value in base_model.state_dict().items()
+        key: value.detach().clone() for key, value in base_model.state_dict().items()
     }
 
     for _ in range(simple_cfg.n_trajectories):
@@ -530,8 +541,14 @@ def load_data(
     )
     train_dataset, val_dataset = train_loader.dataset, val_loader.dataset
     assert isinstance(train_dataset, Sized) and isinstance(val_dataset, Sized)
-    train_inputs, train_labels = (t.to(device) for t in next(iter(DataLoader(train_dataset, batch_size=len(train_dataset)))))
-    val_inputs, val_labels = (t.to(device) for t in next(iter(DataLoader(val_dataset, batch_size=len(val_dataset)))))
+    train_inputs, train_labels = (
+        t.to(device)
+        for t in next(iter(DataLoader(train_dataset, batch_size=len(train_dataset))))
+    )
+    val_inputs, val_labels = (
+        t.to(device)
+        for t in next(iter(DataLoader(val_dataset, batch_size=len(val_dataset))))
+    )
     print(f"train_inputs.device: {train_inputs.device}  shape: {train_inputs.shape}")
     actual_batch_size = min(batch_size, len(train_inputs) // 2)
     return train_inputs, train_labels, val_inputs, val_labels, actual_batch_size
@@ -545,7 +562,12 @@ def setup_model(
     learning_rate: float,
     weight_decay: float,
     device: torch.device,
-) -> tuple[Transformer, Optimizer, torch.optim.lr_scheduler.LRScheduler, torch.nn.CrossEntropyLoss]:
+) -> tuple[
+    Transformer,
+    Optimizer,
+    torch.optim.lr_scheduler.LRScheduler,
+    torch.nn.CrossEntropyLoss,
+]:
     model = Transformer(
         num_layers=num_layers,
         dim_model=dim_model,
@@ -600,6 +622,14 @@ def loss_scaled_temperature(loss: float, ensemble_cfg: EnsembleConfig) -> float:
     return min(
         ensemble_cfg.max_temperature,
         max(ensemble_cfg.min_temperature, temperature),
+    )
+
+
+def loss_scaled_max_temperature(loss: float, simple_cfg: EnsembleSimpleConfig) -> float:
+    loss_factor = min(max(loss, 0.0), 1.0)
+    return min(
+        simple_cfg.max_temperature,
+        max(simple_cfg.min_temperature, simple_cfg.max_temperature * loss_factor),
     )
 
 
@@ -823,6 +853,7 @@ def log_ensemble_simple_metrics(
     particle_metrics: list[ParticleMetrics],
     best_idx: int,
     temperature: float,
+    temperature_ceiling: float,
     resampled: int,
     step: int,
 ) -> None:
@@ -835,6 +866,7 @@ def log_ensemble_simple_metrics(
         "ensemble_simple/best_index": best_idx,
         "ensemble_simple/best_free_energy": best.free_energy,
         "ensemble_simple/temperature": temperature,
+        "ensemble_simple/temperature_ceiling": temperature_ceiling,
         "ensemble_simple/resampled": resampled,
     }
 
