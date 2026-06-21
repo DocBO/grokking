@@ -4,7 +4,7 @@ set -euo pipefail
 uv run python grokking/stats.py \
   --optimizers adamw ensemble-simple \
   --training_fractions 0.11 0.12 0.13 0.14 0.15 0.16 0.18 0.20 \
-  --num_seeds 5 \
+  --num_seeds 1 \
   --repeats 1 \
   --num_steps 100000 \
   --eval_interval 100 \

@@ -62,10 +62,11 @@ The project uses [Weights & Biases](https://wandb.ai/site) to keep track of expe
     ```bash
     bash run_boundary_sweep.sh
     ```
-    This runs five matched seeds at training fractions `0.11`, `0.12`, `0.13`,
-    `0.14`, `0.15`, `0.16`, `0.18`, and `0.20`. Each run stops when validation
-    accuracy exceeds `0.95`, or after 100,000 steps. Results are written to
-    `boundary_sweep_runs/`: the final aggregate report is
+    This initially runs one shared seed for AdamW and `ensemble-simple` at
+    training fractions `0.11`, `0.12`, `0.13`, `0.14`, `0.15`, `0.16`, `0.18`,
+    and `0.20`. Each run stops when validation accuracy exceeds `0.95`, or
+    after 100,000 steps. Results are written to `boundary_sweep_runs/`: the
+    final aggregate report is
     `sweep_summary.csv`, per-run results are in
     `time_to_threshold_summary.csv`, and checkpoint traces are in
     `time_step_trace.csv`.
