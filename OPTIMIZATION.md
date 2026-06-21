@@ -105,6 +105,7 @@ trajectories were resampled around the best current trajectory.
    --max_temperature
    --temperature_heating
    --temperature_cooling
+   --time_cooling_rate
    --stall_window
    --resample_fraction
    --init_perturb_scale
@@ -123,10 +124,26 @@ trajectories were resampled around the best current trajectory.
    theta_i <- theta_i + force_scale * sqrt(2 * lr_i * T) * epsilon_i
    ```
 
-5. Evaluated all trajectories on the full train and validation sets at logging
+5. Applied time-dependent exponential decay to the maximum temperature after
+   every training step:
+
+   ```text
+   T_max,time <- max(
+       min_temperature,
+       T_max,time * exp(-time_cooling_rate)
+   )
+   T <- min(T, T_max,time)
+   ```
+
+   The default `--time_cooling_rate 1e-4` lowers the available heating range
+   continuously in optimization time. It does not reduce the current
+   temperature while that temperature is already below the moving ceiling.
+   A value of `0` disables this mechanism.
+
+6. Evaluated all trajectories on the full train and validation sets at logging
    points.
 
-6. Computed a selection score per trajectory. The supported modes were:
+7. Computed a selection score per trajectory. The supported modes were:
 
    ```text
    validation_loss
@@ -134,9 +151,9 @@ trajectories were resampled around the best current trajectory.
    free_energy
    ```
 
-7. Selected the trajectory with the minimum score.
+8. Selected the trajectory with the minimum score.
 
-8. Adapted temperature according to score progress:
+9. Adapted temperature according to score progress:
 
    - If the selected score improved over the best previously observed score,
      temperature was cooled:
@@ -149,10 +166,21 @@ trajectories were resampled around the best current trajectory.
      temperature was heated:
 
      ```text
-     T <- min(max_temperature, T * temperature_heating)
+     T_ceiling(L_val) = clamp(
+         max_temperature * min(max(L_val, 0), 1),
+         min_temperature,
+         max_temperature
+     )
+     T <- min(T_ceiling(L_val), T * temperature_heating)
      ```
 
-9. Resampled the weakest fraction of trajectories:
+   At evaluation, the effective ceiling is the smaller of the time-dependent
+   and loss-dependent ceilings. Validation losses at or above `1` leave the
+   time-dependent ceiling unchanged. Below `1`, the loss ceiling decreases
+   linearly with the selected trajectory's current validation loss. Neither
+   ceiling falls below `--min_temperature`.
+
+10. Resampled the weakest fraction of trajectories:
 
    ```text
    n_resample = floor(resample_fraction * K)
@@ -165,11 +193,13 @@ trajectories were resampled around the best current trajectory.
    theta_j <- theta_best + resample_perturb_scale * sqrt(max(T, min_temperature)) * epsilon_j
    ```
 
-10. Cleared the AdamW moment state for each copied trajectory so stale optimizer
+11. Cleared the AdamW moment state for each copied trajectory so stale optimizer
     statistics did not carry over to the new location.
 
-11. Logged aggregate best-trajectory metrics and per-particle train loss,
+12. Logged aggregate best-trajectory metrics and per-particle train loss,
     train accuracy, validation loss, validation accuracy, spread, and score.
+    The aggregate metrics include both `ensemble_simple/temperature` and
+    `ensemble_simple/temperature_ceiling`.
 
 ### Interpretation
 

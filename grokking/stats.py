@@ -174,6 +174,15 @@ def parse_args() -> Namespace:
     )
     parser.add_argument("--ensemble_size", type=int, default=4)
     parser.add_argument("--temperature", type=float, default=1e-5)
+    parser.add_argument(
+        "--temperature_start",
+        type=float,
+        default=None,
+        help=(
+            "initial temperature for ensemble-simple; "
+            "defaults to --temperature when omitted"
+        ),
+    )
     parser.add_argument("--min_temperature", type=float, default=1e-7)
     parser.add_argument("--max_temperature", type=float, default=1e-2)
     parser.add_argument("--probe_interval", type=int, default=10)

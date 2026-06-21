@@ -39,8 +39,15 @@ The project uses [Weights & Biases](https://wandb.ai/site) to keep track of expe
     uv run python grokking/cli.py --optimizer ensemble-simple --ensemble_size 4
     ```
     `ensemble-simple` keeps the intermediate method available for comparison:
-    it heats after stalled free-energy progress, cools after improvement, and
-    resamples weak trajectories around the current best trajectory.
+    its initial temperature can be set independently with
+    `--temperature_start` (for example, `--temperature_start 0.02`).
+    When omitted, it falls back to `--temperature` for compatibility. It
+    heats after stalled free-energy progress, cools after improvement, and
+    resamples weak trajectories around the current best trajectory. Its
+    effective maximum temperature also decreases linearly once the selected
+    validation loss falls below `1`. The maximum available temperature decays
+    over time according to `--time_cooling_rate`, which defaults to `1e-4` per
+    training step.
 
 * To collect time-to-90% validation statistics:
     ```bash

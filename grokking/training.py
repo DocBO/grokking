@@ -376,9 +376,13 @@ def get_ensemble_config(config: Any) -> EnsembleConfig:
 
 
 def get_ensemble_simple_config(config: Any) -> EnsembleSimpleConfig:
+    temperature_start = getattr(config, "temperature_start", None)
+    if temperature_start is None:
+        temperature_start = getattr(config, "temperature", 1e-5)
+
     simple_cfg = EnsembleSimpleConfig(
         n_trajectories=getattr(config, "ensemble_size", 4),
-        init_temperature=getattr(config, "temperature", 1e-5),
+        init_temperature=temperature_start,
         min_temperature=getattr(config, "min_temperature", 1e-7),
         max_temperature=getattr(config, "max_temperature", 1e-2),
         heating=getattr(config, "temperature_heating", 2.0),
@@ -414,7 +418,7 @@ def validate_ensemble_simple_config(simple_cfg: EnsembleSimpleConfig) -> None:
     if simple_cfg.n_trajectories < 1:
         raise ValueError("ensemble_size must be at least 1")
     if simple_cfg.init_temperature <= 0:
-        raise ValueError("temperature must be positive for ensemble-simple")
+        raise ValueError("temperature_start must be positive for ensemble-simple")
     if simple_cfg.min_temperature <= 0:
         raise ValueError("min_temperature must be positive")
     if simple_cfg.max_temperature < simple_cfg.min_temperature:
