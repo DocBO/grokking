@@ -4,7 +4,9 @@ from argparse import ArgumentParser, Namespace
 import csv
 from dataclasses import dataclass
 from pathlib import Path
+import statistics
 import time
+from typing import cast
 
 import torch
 
@@ -37,6 +39,7 @@ TRACE_FIELDS = [
     "seed",
     "repeat",
     "optimizer",
+    "training_fraction",
     "step",
     "wall_time_s",
     "model_updates",
@@ -58,6 +61,7 @@ SUMMARY_FIELDS = [
     "seed",
     "repeat",
     "optimizer",
+    "training_fraction",
     "threshold",
     "reached_threshold",
     "time_to_threshold_step",
@@ -69,6 +73,24 @@ SUMMARY_FIELDS = [
     "final_wall_time_s",
     "final_val_acc",
     "final_val_loss",
+    "best_val_acc",
+    "best_val_loss",
+]
+
+AGGREGATE_FIELDS = [
+    "training_fraction",
+    "optimizer",
+    "runs",
+    "successes",
+    "success_rate",
+    "best_val_acc",
+    "mean_best_val_acc",
+    "median_best_val_acc",
+    "mean_steps_to_transition",
+    "median_steps_to_transition",
+    "min_steps_to_transition",
+    "max_steps_to_transition",
+    "mean_time_to_transition_s",
 ]
 
 
@@ -84,6 +106,8 @@ class RunResult:
     final_wall_time_s: float
     final_val_acc: float
     final_val_loss: float
+    best_val_acc: float
+    best_val_loss: float
 
 
 def main() -> None:
@@ -92,6 +116,8 @@ def main() -> None:
 
     trace_path = args.output_dir / "time_step_trace.csv"
     summary_path = args.output_dir / "time_to_threshold_summary.csv"
+    aggregate_path = args.output_dir / "sweep_summary.csv"
+    summary_rows: list[dict[str, object]] = []
 
     with (
         trace_path.open("w", newline="") as trace_file,
@@ -102,46 +128,62 @@ def main() -> None:
         trace_writer.writeheader()
         summary_writer.writeheader()
 
-        for seed in range(args.num_seeds):
-            for repeat in range(args.repeats):
-                run_seed = args.seed_offset + seed + repeat * args.seed_stride
-                for optimizer_name in args.optimizers:
-                    run_id = f"{optimizer_name}_seed{seed}_repeat{repeat}"
-                    print(f"Running {run_id} with torch seed {run_seed}")
-                    torch.manual_seed(run_seed)
-                    result = run_one(
-                        args,
-                        optimizer_name,
-                        run_id,
-                        seed,
-                        repeat,
-                        run_seed,
-                        trace_writer,
-                    )
-                    summary_writer.writerow(
-                        {
+        for training_fraction in args.training_fractions:
+            args.training_fraction = training_fraction
+            for seed in range(args.num_seeds):
+                for repeat in range(args.repeats):
+                    run_seed = args.seed_offset + seed + repeat * args.seed_stride
+                    for optimizer_name in args.optimizers:
+                        fraction_label = f"{training_fraction:.2f}"
+                        run_id = (
+                            f"{optimizer_name}_fraction{fraction_label}_"
+                            f"seed{seed}_repeat{repeat}"
+                        )
+                        print(f"Running {run_id} with torch seed {run_seed}")
+                        torch.manual_seed(run_seed)
+                        result = run_one(
+                            args,
+                            optimizer_name,
+                            run_id,
+                            seed,
+                            repeat,
+                            run_seed,
+                            trace_writer,
+                        )
+                        row: dict[str, object] = {
                             "run_id": run_id,
                             "seed": seed,
                             "repeat": repeat,
                             "optimizer": optimizer_name,
+                            "training_fraction": training_fraction,
                             "threshold": args.threshold,
                             "reached_threshold": result.reached_threshold,
                             "time_to_threshold_step": result.threshold_step,
                             "time_to_threshold_s": result.threshold_time_s,
-                            "model_updates_to_threshold": result.threshold_model_updates,
+                            "model_updates_to_threshold": (
+                                result.threshold_model_updates
+                            ),
                             "probe_count_to_threshold": result.threshold_probe_count,
-                            "collapse_count_to_threshold": result.threshold_collapse_count,
+                            "collapse_count_to_threshold": (
+                                result.threshold_collapse_count
+                            ),
                             "final_step": result.final_step,
                             "final_wall_time_s": result.final_wall_time_s,
                             "final_val_acc": result.final_val_acc,
                             "final_val_loss": result.final_val_loss,
+                            "best_val_acc": result.best_val_acc,
+                            "best_val_loss": result.best_val_loss,
                         }
-                    )
-                    summary_file.flush()
-                    trace_file.flush()
+                        summary_writer.writerow(row)
+                        summary_rows.append(row)
+                        summary_file.flush()
+                        trace_file.flush()
+
+    write_aggregate_summary(aggregate_path, summary_rows)
 
     print(f"Wrote trace data to {trace_path}")
     print(f"Wrote summary data to {summary_path}")
+    print(f"Wrote aggregate sweep data to {aggregate_path}")
 
 
 def parse_args() -> Namespace:
@@ -150,6 +192,13 @@ def parse_args() -> Namespace:
         "--operation", type=str, choices=ALL_OPERATIONS.keys(), default="x/y"
     )
     parser.add_argument("--training_fraction", type=float, default=0.5)
+    parser.add_argument(
+        "--training_fractions",
+        nargs="+",
+        type=float,
+        default=None,
+        help="training fractions to sweep; defaults to --training_fraction",
+    )
     parser.add_argument("--prime", type=int, default=97)
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--dim_model", type=int, default=128)
@@ -164,6 +213,16 @@ def parse_args() -> Namespace:
     parser.add_argument("--seed_offset", type=int, default=0)
     parser.add_argument("--seed_stride", type=int, default=100_000)
     parser.add_argument("--threshold", type=float, default=0.90)
+    parser.add_argument(
+        "--strict_threshold",
+        action="store_true",
+        help="count success only when validation accuracy is greater than threshold",
+    )
+    parser.add_argument(
+        "--stop_at_threshold",
+        action="store_true",
+        help="stop each run at its first successful validation evaluation",
+    )
     parser.add_argument("--eval_interval", type=int, default=10)
     parser.add_argument("--output_dir", type=Path, default=Path("stats_runs"))
     parser.add_argument(
@@ -197,7 +256,10 @@ def parse_args() -> Namespace:
     parser.add_argument("--resample_perturb_scale", type=float, default=1e-3)
     parser.add_argument("--force_scale", type=float, default=1.0)
     parser.add_argument("--entropy_weight", type=float, default=0.01)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.training_fractions is None:
+        args.training_fractions = [args.training_fraction]
+    return args
 
 
 def run_one(
@@ -288,9 +350,10 @@ def run_adamw(
     perm = torch.randperm(n_train, device=device)
     batch_idx = 0
     start_time = time.perf_counter()
-    state = ThresholdState(args.threshold)
+    state = ThresholdState(args.threshold, args.strict_threshold)
     final_val_loss = float("nan")
     final_val_acc = 0.0
+    final_step = 0
 
     for step in range(args.num_steps):
         if batch_idx >= n_train:
@@ -303,6 +366,7 @@ def run_adamw(
         scheduler.step()
 
         completed_steps = step + 1
+        final_step = completed_steps
         if should_eval(completed_steps, args.eval_interval):
             train_loss, train_acc = evaluate(
                 model, train_inputs, train_labels, criterion
@@ -313,12 +377,14 @@ def run_adamw(
             elapsed = time.perf_counter() - start_time
             model_updates = completed_steps
             state.observe(completed_steps, elapsed, model_updates, 0, 0, final_val_acc)
+            state.observe_loss(final_val_loss)
             trace_writer.writerow(
                 trace_row(
                     run_id,
                     seed,
                     repeat,
                     "adamw",
+                    args.training_fraction,
                     completed_steps,
                     elapsed,
                     model_updates,
@@ -333,11 +399,14 @@ def run_adamw(
                     None,
                     None,
                     args.threshold,
+                    args.strict_threshold,
                 )
             )
+            if args.stop_at_threshold and state.reached:
+                break
 
     return state.result(
-        args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss
+        final_step, time.perf_counter() - start_time, final_val_acc, final_val_loss
     )
 
 
@@ -377,9 +446,10 @@ def run_ensemble_simple(
     probe_count = 0
     collapse_count = 0
     start_time = time.perf_counter()
-    state = ThresholdState(args.threshold)
+    state = ThresholdState(args.threshold, args.strict_threshold)
     final_val_loss = float("nan")
     final_val_acc = 0.0
+    final_step = 0
 
     for step in range(args.num_steps):
         for particle_idx, model in enumerate(models):
@@ -413,6 +483,7 @@ def run_ensemble_simple(
         )
         temperature = min(temperature, time_temperature_ceiling)
         completed_steps = step + 1
+        final_step = completed_steps
         if should_eval(completed_steps, args.eval_interval):
             probe_count += 1
             metrics = evaluate_ensemble_simple(
@@ -467,12 +538,14 @@ def run_ensemble_simple(
                 collapse_count,
                 final_val_acc,
             )
+            state.observe_loss(final_val_loss)
             trace_writer.writerow(
                 trace_row(
                     run_id,
                     seed,
                     repeat,
                     "ensemble-simple",
+                    args.training_fraction,
                     completed_steps,
                     elapsed,
                     model_updates,
@@ -487,11 +560,14 @@ def run_ensemble_simple(
                     best.free_energy,
                     best_idx,
                     args.threshold,
+                    args.strict_threshold,
                 )
             )
+            if args.stop_at_threshold and state.reached:
+                break
 
     return state.result(
-        args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss
+        final_step, time.perf_counter() - start_time, final_val_acc, final_val_loss
     )
 
 
@@ -530,9 +606,10 @@ def run_ensemble(
     probe_count = 0
     collapse_count = 0
     start_time = time.perf_counter()
-    state = ThresholdState(args.threshold)
+    state = ThresholdState(args.threshold, args.strict_threshold)
     final_val_loss = float("nan")
     final_val_acc = 0.0
+    final_step = 0
 
     for step in range(args.num_steps):
         for particle_idx, model in enumerate(models):
@@ -560,6 +637,7 @@ def run_ensemble(
             )
 
         completed_steps = step + 1
+        final_step = completed_steps
         if should_probe_ensemble(completed_steps, ensemble_cfg.probe_interval):
             probe_count += 1
             metrics = evaluate_ensemble(
@@ -600,12 +678,14 @@ def run_ensemble(
                 collapse_count,
                 final_val_acc,
             )
+            state.observe_loss(final_val_loss)
             trace_writer.writerow(
                 trace_row(
                     run_id,
                     seed,
                     repeat,
                     "ensemble",
+                    args.training_fraction,
                     completed_steps,
                     elapsed,
                     model_updates,
@@ -620,24 +700,30 @@ def run_ensemble(
                     best.free_energy,
                     best_idx,
                     args.threshold,
+                    args.strict_threshold,
                 )
             )
             _ = collapsed
+            if args.stop_at_threshold and state.reached:
+                break
 
     return state.result(
-        args.num_steps, time.perf_counter() - start_time, final_val_acc, final_val_loss
+        final_step, time.perf_counter() - start_time, final_val_acc, final_val_loss
     )
 
 
 class ThresholdState:
-    def __init__(self, threshold: float) -> None:
+    def __init__(self, threshold: float, strict: bool = False) -> None:
         self.threshold = threshold
+        self.strict = strict
         self.reached = False
         self.step: int | None = None
         self.wall_time_s: float | None = None
         self.model_updates: int | None = None
         self.probe_count: int | None = None
         self.collapse_count: int | None = None
+        self.best_val_acc = 0.0
+        self.best_val_loss = float("inf")
 
     def observe(
         self,
@@ -648,7 +734,8 @@ class ThresholdState:
         collapse_count: int,
         val_acc: float,
     ) -> None:
-        if self.reached or val_acc < self.threshold:
+        self.best_val_acc = max(self.best_val_acc, val_acc)
+        if self.reached or not self.is_success(val_acc):
             return
         self.reached = True
         self.step = step
@@ -656,6 +743,14 @@ class ThresholdState:
         self.model_updates = model_updates
         self.probe_count = probe_count
         self.collapse_count = collapse_count
+
+    def observe_loss(self, val_loss: float) -> None:
+        self.best_val_loss = min(self.best_val_loss, val_loss)
+
+    def is_success(self, val_acc: float) -> bool:
+        if self.strict:
+            return val_acc > self.threshold
+        return val_acc >= self.threshold
 
     def result(
         self,
@@ -675,6 +770,8 @@ class ThresholdState:
             final_wall_time_s=final_wall_time_s,
             final_val_acc=final_val_acc,
             final_val_loss=final_val_loss,
+            best_val_acc=self.best_val_acc,
+            best_val_loss=self.best_val_loss,
         )
 
 
@@ -684,11 +781,66 @@ def should_eval(step: int, eval_interval: int) -> bool:
     return step == 1 or step % eval_interval == 0
 
 
+def write_aggregate_summary(
+    output_path: Path, summary_rows: list[dict[str, object]]
+) -> None:
+    groups: dict[tuple[float, str], list[dict[str, object]]] = {}
+    for row in summary_rows:
+        key = (
+            cast(float, row["training_fraction"]),
+            cast(str, row["optimizer"]),
+        )
+        groups.setdefault(key, []).append(row)
+
+    with output_path.open("w", newline="") as output_file:
+        writer = csv.DictWriter(output_file, fieldnames=AGGREGATE_FIELDS)
+        writer.writeheader()
+        for (training_fraction, optimizer_name), rows in sorted(groups.items()):
+            successful_rows = [
+                row for row in rows if bool(row["reached_threshold"])
+            ]
+            best_accuracies = [cast(float, row["best_val_acc"]) for row in rows]
+            transition_steps = [
+                cast(int, row["time_to_threshold_step"]) for row in successful_rows
+            ]
+            transition_times = [
+                cast(float, row["time_to_threshold_s"]) for row in successful_rows
+            ]
+            writer.writerow(
+                {
+                    "training_fraction": training_fraction,
+                    "optimizer": optimizer_name,
+                    "runs": len(rows),
+                    "successes": len(successful_rows),
+                    "success_rate": len(successful_rows) / len(rows),
+                    "best_val_acc": max(best_accuracies),
+                    "mean_best_val_acc": statistics.fmean(best_accuracies),
+                    "median_best_val_acc": statistics.median(best_accuracies),
+                    "mean_steps_to_transition": (
+                        statistics.fmean(transition_steps) if transition_steps else ""
+                    ),
+                    "median_steps_to_transition": (
+                        statistics.median(transition_steps) if transition_steps else ""
+                    ),
+                    "min_steps_to_transition": (
+                        min(transition_steps) if transition_steps else ""
+                    ),
+                    "max_steps_to_transition": (
+                        max(transition_steps) if transition_steps else ""
+                    ),
+                    "mean_time_to_transition_s": (
+                        statistics.fmean(transition_times) if transition_times else ""
+                    ),
+                }
+            )
+
+
 def trace_row(
     run_id: str,
     seed: int,
     repeat: int,
     optimizer_name: str,
+    training_fraction: float,
     step: int,
     wall_time_s: float,
     model_updates: int,
@@ -703,12 +855,14 @@ def trace_row(
     free_energy: float | None,
     best_idx: int | None,
     threshold: float,
+    strict_threshold: bool,
 ) -> dict[str, object]:
     return {
         "run_id": run_id,
         "seed": seed,
         "repeat": repeat,
         "optimizer": optimizer_name,
+        "training_fraction": training_fraction,
         "step": step,
         "wall_time_s": wall_time_s,
         "model_updates": model_updates,
@@ -722,7 +876,9 @@ def trace_row(
         "temperature_ceiling": temperature_ceiling,
         "free_energy": free_energy,
         "best_index": best_idx,
-        "reached_threshold": val_acc >= threshold,
+        "reached_threshold": (
+            val_acc > threshold if strict_threshold else val_acc >= threshold
+        ),
     }
 
 
