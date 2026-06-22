@@ -64,12 +64,23 @@ The project uses [Weights & Biases](https://wandb.ai/site) to keep track of expe
     ```
     This initially runs one shared seed for AdamW and `ensemble-simple` at
     training fractions `0.11`, `0.12`, `0.13`, `0.14`, `0.15`, `0.16`, `0.18`,
-    and `0.20`. Each run stops when validation accuracy exceeds `0.95`, or
-    after 100,000 steps. Results are written to `boundary_sweep_runs/`: the
+    and `0.20`. Each run stops when validation accuracy exceeds `0.95`.
+    `ensemble-simple` has a 100,000-step maximum and AdamW has a 400,000-step
+    maximum. Results are written to `boundary_sweep_runs/`: the
     final aggregate report is
     `sweep_summary.csv`, per-run results are in
     `time_to_threshold_summary.csv`, and checkpoint traces are in
     `time_step_trace.csv`.
+
+    A targeted sweep can override the fraction range and optimizer:
+    ```bash
+    bash run_boundary_sweep.sh \
+      --fraction 0.13 --steps 1 --stepsize 0.01 --optimizer adamw
+    ```
+    Here, `--fraction` is the starting fraction, `--steps` is the number of
+    fractions, and `--stepsize` is the increment. For example, starting at
+    `0.13` with three steps and a step size of `0.01` runs `0.13`, `0.14`,
+    and `0.15`.
 
 * To run a harder generalization task:
     ```bash

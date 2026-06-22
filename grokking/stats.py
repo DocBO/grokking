@@ -62,6 +62,7 @@ SUMMARY_FIELDS = [
     "repeat",
     "optimizer",
     "training_fraction",
+    "max_steps",
     "threshold",
     "reached_threshold",
     "time_to_threshold_step",
@@ -80,6 +81,7 @@ SUMMARY_FIELDS = [
 AGGREGATE_FIELDS = [
     "training_fraction",
     "optimizer",
+    "max_steps",
     "runs",
     "successes",
     "success_rate",
@@ -156,6 +158,9 @@ def main() -> None:
                             "repeat": repeat,
                             "optimizer": optimizer_name,
                             "training_fraction": training_fraction,
+                            "max_steps": max_steps_for_optimizer(
+                                args, optimizer_name
+                            ),
                             "threshold": args.threshold,
                             "reached_threshold": result.reached_threshold,
                             "time_to_threshold_step": result.threshold_step,
@@ -199,6 +204,24 @@ def parse_args() -> Namespace:
         default=None,
         help="training fractions to sweep; defaults to --training_fraction",
     )
+    parser.add_argument(
+        "--fraction",
+        type=float,
+        default=None,
+        help="first training fraction in a generated sweep",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=None,
+        help="number of fractions in a generated sweep",
+    )
+    parser.add_argument(
+        "--stepsize",
+        type=float,
+        default=0.01,
+        help="increment between generated training fractions",
+    )
     parser.add_argument("--prime", type=int, default=97)
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--dim_model", type=int, default=128)
@@ -207,6 +230,12 @@ def parse_args() -> Namespace:
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1)
     parser.add_argument("--num_steps", type=int, default=100_000)
+    parser.add_argument(
+        "--adamw_num_steps",
+        type=int,
+        default=None,
+        help="AdamW-specific maximum; defaults to --num_steps",
+    )
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--num_seeds", type=int, default=20)
     parser.add_argument("--repeats", type=int, default=3)
@@ -230,6 +259,12 @@ def parse_args() -> Namespace:
         nargs="+",
         choices=["adamw", "ensemble-simple", "ensemble"],
         default=["adamw", "ensemble-simple", "ensemble"],
+    )
+    parser.add_argument(
+        "--optimizer",
+        choices=["adamw", "ensemble-simple", "ensemble"],
+        default=None,
+        help="run only one optimizer; overrides --optimizers",
     )
     parser.add_argument("--ensemble_size", type=int, default=4)
     parser.add_argument("--temperature", type=float, default=1e-5)
@@ -257,8 +292,22 @@ def parse_args() -> Namespace:
     parser.add_argument("--force_scale", type=float, default=1.0)
     parser.add_argument("--entropy_weight", type=float, default=0.01)
     args = parser.parse_args()
-    if args.training_fractions is None:
+    if args.fraction is not None:
+        fraction_steps = 1 if args.steps is None else args.steps
+        if fraction_steps <= 0:
+            parser.error("--steps must be positive")
+        args.training_fractions = [
+            round(args.fraction + index * args.stepsize, 10)
+            for index in range(fraction_steps)
+        ]
+    elif args.steps is not None:
+        parser.error("--steps requires --fraction")
+    elif args.training_fractions is None:
         args.training_fractions = [args.training_fraction]
+    if args.optimizer is not None:
+        args.optimizers = [args.optimizer]
+    if args.adamw_num_steps is not None and args.adamw_num_steps <= 0:
+        parser.error("--adamw_num_steps must be positive")
     return args
 
 
@@ -355,7 +404,7 @@ def run_adamw(
     final_val_acc = 0.0
     final_step = 0
 
-    for step in range(args.num_steps):
+    for step in range(max_steps_for_optimizer(args, "adamw")):
         if batch_idx >= n_train:
             perm = torch.randperm(n_train, device=device)
             batch_idx = 0
@@ -781,6 +830,12 @@ def should_eval(step: int, eval_interval: int) -> bool:
     return step == 1 or step % eval_interval == 0
 
 
+def max_steps_for_optimizer(args: Namespace, optimizer_name: str) -> int:
+    if optimizer_name == "adamw" and args.adamw_num_steps is not None:
+        return int(args.adamw_num_steps)
+    return int(args.num_steps)
+
+
 def write_aggregate_summary(
     output_path: Path, summary_rows: list[dict[str, object]]
 ) -> None:
@@ -810,6 +865,7 @@ def write_aggregate_summary(
                 {
                     "training_fraction": training_fraction,
                     "optimizer": optimizer_name,
+                    "max_steps": max(cast(int, row["max_steps"]) for row in rows),
                     "runs": len(rows),
                     "successes": len(successful_rows),
                     "success_rate": len(successful_rows) / len(rows),

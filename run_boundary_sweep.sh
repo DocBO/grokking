@@ -7,6 +7,7 @@ uv run python grokking/stats.py \
   --num_seeds 1 \
   --repeats 1 \
   --num_steps 100000 \
+  --adamw_num_steps 400000 \
   --eval_interval 100 \
   --threshold 0.95 \
   --strict_threshold \
