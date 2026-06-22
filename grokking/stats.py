@@ -266,7 +266,13 @@ def parse_args() -> Namespace:
         default=None,
         help="run only one optimizer; overrides --optimizers",
     )
-    parser.add_argument("--ensemble_size", type=int, default=4)
+    parser.add_argument(
+        "--ensemble_size",
+        "--ensemble-size",
+        dest="ensemble_size",
+        type=int,
+        default=4,
+    )
     parser.add_argument("--temperature", type=float, default=1e-5)
     parser.add_argument(
         "--temperature_start",

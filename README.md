@@ -75,7 +75,8 @@ The project uses [Weights & Biases](https://wandb.ai/site) to keep track of expe
     A targeted sweep can override the fraction range and optimizer:
     ```bash
     bash run_boundary_sweep.sh \
-      --fraction 0.13 --steps 1 --stepsize 0.01 --optimizer adamw
+      --fraction 0.13 --steps 1 --stepsize 0.01 \
+      --optimizer ensemble-simple --ensemble-size 2
     ```
     Here, `--fraction` is the starting fraction, `--steps` is the number of
     fractions, and `--stepsize` is the increment. For example, starting at

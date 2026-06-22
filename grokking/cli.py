@@ -32,7 +32,13 @@ if __name__ == "__main__":
         choices=["adamw", "ensemble-simple", "ensemble"],
         help=SUPPRESS,
     )
-    parser.add_argument("--ensemble_size", type=int, default=4)
+    parser.add_argument(
+        "--ensemble_size",
+        "--ensemble-size",
+        dest="ensemble_size",
+        type=int,
+        default=4,
+    )
     parser.add_argument("--temperature", type=float, default=1e-5)
     parser.add_argument(
         "--temperature_start",
